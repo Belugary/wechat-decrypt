@@ -45,6 +45,15 @@ Linux：
 - 需要 root 权限或 `CAP_SYS_PTRACE`（读取 `/proc/<pid>/mem`）
 - `db_dir` 默认类似 `~/Documents/xwechat_files/<wxid>/db_storage`
 
+macOS：
+
+- macOS 10.15+（Apple Silicon / Intel 均可）
+- 微信 4.x（macOS 版）
+- Xcode Command Line Tools：`xcode-select --install`
+- 需要对 `/Applications/WeChat.app` 做 ad-hoc 重签名（允许进程内存读取）
+- 需要 root 权限运行扫描器
+- `db_dir` 默认类似 `~/Library/Containers/com.tencent.xinWeChat/Data/Library/Application Support/com.tencent.xinWeChat/2.0b4.0.9/<hash>/Message`
+
 ### 安装依赖
 
 ```bash
@@ -74,6 +83,20 @@ Linux：
 python3 main.py decrypt
 ```
 
+macOS（密钥扫描用 C 版本，见下文 [macOS 数据库密钥扫描](#macos-数据库密钥扫描-wechat-4x) 章节）：
+
+```bash
+# 1. 重新签名（首次及微信升级后各一次）
+sudo codesign --force --deep --sign - /Applications/WeChat.app
+
+# 2. 编译并运行扫描器
+cc -O2 -o find_all_keys_macos find_all_keys_macos.c -framework Foundation
+sudo ./find_all_keys_macos
+
+# 3. 解密
+python3 decrypt_db.py
+```
+
 程序会自动完成：配置检测 → 内存扫描提取密钥 → 解密。首次运行会自动检测微信数据目录并生成 `config.json`。微信只要在运行中即可，无需重启或重新登录。
 
 如果自动检测失败（例如微信安装在非默认位置），手动创建 `config.json`：
@@ -97,7 +120,18 @@ Linux 版 `config.json` 示例：
 }
 ```
 
-`db_dir` 路径：Windows 可在微信设置 → 文件管理中找到；Linux 默认在 `~/Documents/xwechat_files/<wxid>/db_storage`。
+macOS 版 `config.json` 示例：
+
+```json
+{
+    "db_dir": "/Users/yourname/Library/Containers/com.tencent.xinWeChat/Data/Library/Application Support/com.tencent.xinWeChat/2.0b4.0.9/<hash>/Message",
+    "keys_file": "all_keys.json",
+    "decrypted_dir": "decrypted",
+    "wechat_process": "WeChat"
+}
+```
+
+`db_dir` 路径：Windows 可在微信设置 → 文件管理中找到；Linux 默认在 `~/Documents/xwechat_files/<wxid>/db_storage`；macOS 在 `~/Library/Containers/com.tencent.xinWeChat/.../Message`（`<hash>` 是微信随机生成的账号目录）。
 
 ### Web UI 说明
 
