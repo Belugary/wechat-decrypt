@@ -435,10 +435,16 @@ def decrypt_wal_full(wal_path, out_path, enc_key):
     return patched, ms
 
 
-def load_contact_names():
+def load_contact_names(db_path=None):
+    """加载联系人名字字典。
+
+    Args:
+        db_path: 指定的 contact.db 路径。None 则使用 CONTACT_CACHE（静态快照，可能过期）。
+                 实时场景应传入 db_cache.get("contact/contact.db") 返回的路径，确保数据最新。
+    """
     names = {}
     try:
-        conn = sqlite3.connect(CONTACT_CACHE)
+        conn = sqlite3.connect(db_path or CONTACT_CACHE)
         for r in conn.execute("SELECT username, nick_name, remark FROM contact").fetchall():
             names[r[0]] = r[2] if r[2] else r[1] if r[1] else r[0]
         conn.close()
@@ -1365,11 +1371,20 @@ class SessionMonitor:
             if is_new:
                 display = self.contact_names.get(username, username)
                 is_group = '@chatroom' in username
-                # 新群/新联系人不在缓存中时，重新加载联系人
-                if display == username and username not in self.contact_names:
-                    refreshed = load_contact_names()
+                # 新群/新联系人不在缓存中时，通过 db_cache 实时解密 contact.db 后重新加载
+                # （load_contact_names 默认读静态快照，新加的联系人不在里面，这里必须走实时解密）
+                if username not in self.contact_names:
+                    fresh_contact_db = None
+                    if self.db_cache:
+                        try:
+                            fresh_contact_db = self.db_cache.get(os.path.join("contact", "contact.db"))
+                        except Exception as e:
+                            print(f"  [contact] 实时解密 contact.db 失败: {e}", flush=True)
+                    refreshed = load_contact_names(fresh_contact_db)
                     self.contact_names.update(refreshed)
                     display = self.contact_names.get(username, username)
+                    if username in refreshed:
+                        print(f"  [contact] 新增: {username} -> {display}", flush=True)
                 sender = ''
                 if is_group:
                     sender = self.contact_names.get(curr['sender'], curr['sender_name'] or curr['sender'])
