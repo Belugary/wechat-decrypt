@@ -90,6 +90,10 @@ def decrypt_wal_full(wal_path, out_path, enc_key):
     WAL 是预分配固定大小（4MB），包含当前有效 frame 和上一轮遗留的旧 frame。
     通过 WAL header 中的 salt 值区分：只有 frame header 的 salt 匹配 WAL header 的才是有效 frame。
 
+    out_path 以 'r+b' 原地 patch：异常发生时已写入的 page 落盘但后续未写，产物
+    会停在"部分 patch"状态。这不需要手动回滚 —— 下一次 full_decrypt() / 调用方
+    重跑会以 'wb' truncate 重写整个 .db，半 patch 状态自愈。
+
     返回: (patched_pages, elapsed_ms)
     """
     t0 = time.perf_counter()
@@ -239,6 +243,12 @@ def main(argv=None):
             "若需当天最新数据请加 --with-wal",
             file=sys.stderr,
         )
+
+    # 校验 db_dir 存在(否则 os.walk 会静默返回空,exit 0,
+    # 让用户误以为"全部成功"但其实根本没扫到 .db)
+    if not os.path.isdir(db_dir):
+        print(f"[ERROR] DB 目录不存在或不可访问: {db_dir}", file=sys.stderr)
+        sys.exit(1)
 
     # 加载密钥
     if not os.path.exists(keys_file):

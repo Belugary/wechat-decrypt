@@ -205,6 +205,24 @@ class CliOverrideTests(unittest.TestCase):
             f"output should land under --out-dir at {produced}",
         )
 
+    def test_db_dir_nonexistent_exits_1(self):
+        """--db-dir 指向不存在的目录应该 exit 1 + stderr 报错,而不是静默 exit 0
+        (os.walk 对不存在的目录会默默返回空 iterator)。"""
+        argv = [
+            "--db-dir", "/nonexistent/path/that/does/not/exist",
+            "--keys-file", self.h.keys_file,
+            "--out-dir", self.h.out_dir,
+        ]
+        stderr = io.StringIO()
+        exit_code = None
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            try:
+                decrypt_db.main(argv)
+            except SystemExit as e:
+                exit_code = e.code
+        self.assertEqual(exit_code, 1)
+        self.assertIn("DB 目录不存在", stderr.getvalue())
+
 
 class WalCoreFunctionTests(unittest.TestCase):
     """decrypt_wal_full 在边界场景的真实行为(无加密、纯文件操作)。"""
