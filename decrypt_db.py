@@ -5,7 +5,7 @@ WeChat 4.0 数据库解密器
 参数: SQLCipher 4, AES-256-CBC, HMAC-SHA512, reserve=80, page_size=4096
 密钥来源: all_keys.json (由find_all_keys.py从内存提取)
 """
-import hashlib, struct, os, sys, json
+import hashlib, struct, os, sys, json, time
 import hmac as hmac_mod
 from Crypto.Cipher import AES
 
@@ -19,6 +19,8 @@ IV_SZ = 16
 HMAC_SZ = 64
 RESERVE_SZ = 80  # IV(16) + HMAC(64)
 SQLITE_HDR = b'SQLite format 3\x00'
+WAL_HEADER_SZ = 32
+WAL_FRAME_HEADER_SZ = 24
 
 from config import load_config
 from key_utils import get_key_info, strip_key_metadata
@@ -50,6 +52,89 @@ def decrypt_page(enc_key, page_data, pgno):
         cipher = AES.new(enc_key, AES.MODE_CBC, iv)
         decrypted = cipher.decrypt(encrypted)
         return decrypted + b'\x00' * RESERVE_SZ
+
+
+def full_decrypt(db_path, out_path, enc_key):
+    """全量解密 .db 文件到 out_path（不做 HMAC 校验，纯热路径）。
+
+    与 decrypt_database() 的区别：
+    - 跳过 page 1 HMAC 校验，假设 enc_key 已在 daemon/调用方启动时验过；
+    - 不打印进度日志；
+    - 返回 (total_pages, elapsed_ms) 给上层做延迟测量。
+
+    daemon 路径（monitor_web 等）应使用本函数；批量 CLI（main()）走
+    decrypt_database() 以获得完整 HMAC 校验和进度输出。
+    """
+    t0 = time.perf_counter()
+    file_size = os.path.getsize(db_path)
+    total_pages = file_size // PAGE_SZ
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with open(db_path, 'rb') as fin, open(out_path, 'wb') as fout:
+        for pgno in range(1, total_pages + 1):
+            page = fin.read(PAGE_SZ)
+            if len(page) < PAGE_SZ:
+                if len(page) > 0:
+                    page = page + b'\x00' * (PAGE_SZ - len(page))
+                else:
+                    break
+            fout.write(decrypt_page(enc_key, page, pgno))
+
+    ms = (time.perf_counter() - t0) * 1000
+    return total_pages, ms
+
+
+def decrypt_wal_full(wal_path, out_path, enc_key):
+    """解密 WAL 当前有效 frame，patch 到已解密的 DB 副本。
+
+    WAL 是预分配固定大小（4MB），包含当前有效 frame 和上一轮遗留的旧 frame。
+    通过 WAL header 中的 salt 值区分：只有 frame header 的 salt 匹配 WAL header 的才是有效 frame。
+
+    返回: (patched_pages, elapsed_ms)
+    """
+    t0 = time.perf_counter()
+
+    if not os.path.exists(wal_path):
+        return 0, 0
+
+    wal_size = os.path.getsize(wal_path)
+    if wal_size <= WAL_HEADER_SZ:
+        return 0, 0
+
+    frame_size = WAL_FRAME_HEADER_SZ + PAGE_SZ  # 24 + 4096 = 4120
+    patched = 0
+
+    with open(wal_path, 'rb') as wf, open(out_path, 'r+b') as df:
+        # 读 WAL header，获取当前 salt 值
+        wal_hdr = wf.read(WAL_HEADER_SZ)
+        wal_salt1 = struct.unpack('>I', wal_hdr[16:20])[0]
+        wal_salt2 = struct.unpack('>I', wal_hdr[20:24])[0]
+
+        while wf.tell() + frame_size <= wal_size:
+            fh = wf.read(WAL_FRAME_HEADER_SZ)
+            if len(fh) < WAL_FRAME_HEADER_SZ:
+                break
+            pgno = struct.unpack('>I', fh[0:4])[0]
+            frame_salt1 = struct.unpack('>I', fh[8:12])[0]
+            frame_salt2 = struct.unpack('>I', fh[12:16])[0]
+
+            ep = wf.read(PAGE_SZ)
+            if len(ep) < PAGE_SZ:
+                break
+
+            # 校验: pgno 有效 且 salt 匹配当前 WAL 周期
+            if pgno == 0 or pgno > 1000000:
+                continue
+            if frame_salt1 != wal_salt1 or frame_salt2 != wal_salt2:
+                continue  # 旧周期遗留的 frame，跳过
+
+            dec = decrypt_page(enc_key, ep, pgno)
+            df.seek((pgno - 1) * PAGE_SZ)
+            df.write(dec)
+            patched += 1
+
+    ms = (time.perf_counter() - t0) * 1000
+    return patched, ms
 
 
 def decrypt_database(db_path, out_path, enc_key):
