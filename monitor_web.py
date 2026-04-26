@@ -18,16 +18,20 @@ import glob as glob_mod
 import zstandard as zstd
 from decode_image import extract_md5_from_packed_info, decrypt_dat_file, is_v2_format
 from key_utils import get_key_info, strip_key_metadata
+from decrypt_db import (
+    decrypt_page,
+    full_decrypt,
+    decrypt_wal_full,
+    PAGE_SZ,
+    KEY_SZ,
+    SALT_SZ,
+    RESERVE_SZ,
+    SQLITE_HDR,
+    WAL_HEADER_SZ,
+    WAL_FRAME_HEADER_SZ,
+)
 
 _zstd_dctx = zstd.ZstdDecompressor()
-
-PAGE_SZ = 4096
-KEY_SZ = 32
-SALT_SZ = 16
-RESERVE_SZ = 80
-SQLITE_HDR = b'SQLite format 3\x00'
-WAL_HEADER_SZ = 32
-WAL_FRAME_HEADER_SZ = 24
 
 from config import load_config
 _cfg = load_config()
@@ -344,95 +348,6 @@ def build_username_db_map():
         mapping[username].sort(key=lambda k: db_mtimes.get(k, 0), reverse=True)
 
     return mapping
-
-
-def decrypt_page(enc_key, page_data, pgno):
-    """解密单个加密页面"""
-    iv = page_data[PAGE_SZ - RESERVE_SZ: PAGE_SZ - RESERVE_SZ + 16]
-    if pgno == 1:
-        encrypted = page_data[SALT_SZ: PAGE_SZ - RESERVE_SZ]
-        cipher = AES.new(enc_key, AES.MODE_CBC, iv)
-        decrypted = cipher.decrypt(encrypted)
-        return bytearray(SQLITE_HDR + decrypted + b'\x00' * RESERVE_SZ)
-    else:
-        encrypted = page_data[:PAGE_SZ - RESERVE_SZ]
-        cipher = AES.new(enc_key, AES.MODE_CBC, iv)
-        decrypted = cipher.decrypt(encrypted)
-        return decrypted + b'\x00' * RESERVE_SZ
-
-
-def full_decrypt(db_path, out_path, enc_key):
-    """首次全量解密"""
-    t0 = time.perf_counter()
-    file_size = os.path.getsize(db_path)
-    total_pages = file_size // PAGE_SZ
-
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with open(db_path, 'rb') as fin, open(out_path, 'wb') as fout:
-        for pgno in range(1, total_pages + 1):
-            page = fin.read(PAGE_SZ)
-            if len(page) < PAGE_SZ:
-                if len(page) > 0:
-                    page = page + b'\x00' * (PAGE_SZ - len(page))
-                else:
-                    break
-            fout.write(decrypt_page(enc_key, page, pgno))
-
-    ms = (time.perf_counter() - t0) * 1000
-    return total_pages, ms
-
-
-def decrypt_wal_full(wal_path, out_path, enc_key):
-    """解密WAL当前有效frame，patch到已解密的DB副本
-
-    WAL是预分配固定大小(4MB)，包含当前有效frame和上一轮遗留的旧frame。
-    通过WAL header中的salt值区分：只有frame header的salt匹配WAL header的才是有效frame。
-
-    返回: (patched_pages, elapsed_ms)
-    """
-    t0 = time.perf_counter()
-
-    if not os.path.exists(wal_path):
-        return 0, 0
-
-    wal_size = os.path.getsize(wal_path)
-    if wal_size <= WAL_HEADER_SZ:
-        return 0, 0
-
-    frame_size = WAL_FRAME_HEADER_SZ + PAGE_SZ  # 24 + 4096 = 4120
-    patched = 0
-
-    with open(wal_path, 'rb') as wf, open(out_path, 'r+b') as df:
-        # 读WAL header，获取当前salt值
-        wal_hdr = wf.read(WAL_HEADER_SZ)
-        wal_salt1 = struct.unpack('>I', wal_hdr[16:20])[0]
-        wal_salt2 = struct.unpack('>I', wal_hdr[20:24])[0]
-
-        while wf.tell() + frame_size <= wal_size:
-            fh = wf.read(WAL_FRAME_HEADER_SZ)
-            if len(fh) < WAL_FRAME_HEADER_SZ:
-                break
-            pgno = struct.unpack('>I', fh[0:4])[0]
-            frame_salt1 = struct.unpack('>I', fh[8:12])[0]
-            frame_salt2 = struct.unpack('>I', fh[12:16])[0]
-
-            ep = wf.read(PAGE_SZ)
-            if len(ep) < PAGE_SZ:
-                break
-
-            # 校验: pgno有效 且 salt匹配当前WAL周期
-            if pgno == 0 or pgno > 1000000:
-                continue
-            if frame_salt1 != wal_salt1 or frame_salt2 != wal_salt2:
-                continue  # 旧周期遗留的frame，跳过
-
-            dec = decrypt_page(enc_key, ep, pgno)
-            df.seek((pgno - 1) * PAGE_SZ)
-            df.write(dec)
-            patched += 1
-
-    ms = (time.perf_counter() - t0) * 1000
-    return patched, ms
 
 
 def load_contact_names(db_path=None):
