@@ -290,6 +290,77 @@ class CallbackTests(unittest.TestCase):
             self.assertEqual(len(events), 3)
             self.assertTrue(all(s == "decoded" for s in events))
 
+    def test_on_file_fires_on_exception_path(self):
+        """decrypt_dat_file 抛异常时,on_file 仍以 status='failed' 触发。
+
+        contractually "每文件调用一次" 的回归保护:if-on_file 块在 try/except
+        之外,无 continue,所以 except 路径不会跳过它。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            attach = os.path.join(tmp, "attach")
+            out = os.path.join(tmp, "out")
+            _make_dat(attach, "h1", "2026-01", "a")
+            events = []
+            mock = _MockedDecrypt(raises=RuntimeError("synthetic decrypt failure"))
+            with patch.object(decode_image, "decrypt_dat_file", mock), \
+                 redirect_stderr(io.StringIO()):
+                decode_image.decode_all_dats(
+                    attach, out, aes_key="x" * 16, progress_every=None,
+                    on_file=lambda i, total, p, status, fmt: events.append(status),
+                )
+            self.assertEqual(events, ["failed"])
+
+
+class EdgeCaseTests(unittest.TestCase):
+    """边界场景:空 / 不存在 attach_dir、非标准路径布局。"""
+
+    def test_empty_attach_dir_returns_zero_stats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            attach = os.path.join(tmp, "attach")
+            out = os.path.join(tmp, "out")
+            os.makedirs(attach)  # 空目录
+            stats = decode_image.decode_all_dats(
+                attach, out, aes_key="x" * 16, progress_every=None,
+            )
+            self.assertEqual(stats["total"], 0)
+            self.assertEqual(stats["decoded"], 0)
+            self.assertEqual(stats["failed"], 0)
+
+    def test_nonexistent_attach_dir_returns_zero_stats(self):
+        """不存在的目录:glob 返回空,函数本身不该崩(由调用方决定是否报错)。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            attach = os.path.join(tmp, "does_not_exist")
+            out = os.path.join(tmp, "out")
+            stats = decode_image.decode_all_dats(
+                attach, out, aes_key="x" * 16, progress_every=None,
+            )
+            self.assertEqual(stats["total"], 0)
+
+class MainCliRouteTests(unittest.TestCase):
+    """main._run_decode_images 的早路由 + 守卫验证。"""
+
+    def test_attach_dir_nonexistent_exits_1(self):
+        """主入口的 _run_decode_images 应在 attach_dir 不存在时 stderr 报错 + exit 1,
+        而不是默默把 0 个文件当成功(那会让用户误判 pipeline 完成)。"""
+        import main
+        fake_cfg = {
+            "db_dir": "/tmp/wechat_test_dummy_db",
+            "decoded_image_dir": "/tmp/wechat_test_dummy_out",
+        }
+        argv = [
+            "--attach-dir", "/path/that/absolutely/does/not/exist/anywhere",
+            "--decoded-dir", fake_cfg["decoded_image_dir"],
+        ]
+        stderr = io.StringIO()
+        exit_code = None
+        with redirect_stderr(stderr), patch("sys.stdout", new_callable=io.StringIO):
+            try:
+                main._run_decode_images(fake_cfg, argv)
+            except SystemExit as e:
+                exit_code = e.code
+        self.assertEqual(exit_code, 1)
+        self.assertIn("attach 目录不存在", stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
