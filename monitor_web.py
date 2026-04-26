@@ -6,7 +6,7 @@ http://localhost:5678
 - 检测到变化后：全量解密DB + 全量WAL patch
 - SSE 服务器推送
 """
-import hashlib, struct, os, sys, json, time, sqlite3, io, threading, queue, traceback
+import hashlib, os, sys, json, time, sqlite3, io, threading, queue, traceback
 import hmac as hmac_mod
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -18,18 +18,7 @@ import glob as glob_mod
 import zstandard as zstd
 from decode_image import extract_md5_from_packed_info, decrypt_dat_file, is_v2_format
 from key_utils import get_key_info, strip_key_metadata
-from decrypt_db import (
-    decrypt_page,
-    full_decrypt,
-    decrypt_wal_full,
-    PAGE_SZ,
-    KEY_SZ,
-    SALT_SZ,
-    RESERVE_SZ,
-    SQLITE_HDR,
-    WAL_HEADER_SZ,
-    WAL_FRAME_HEADER_SZ,
-)
+from decrypt_db import full_decrypt, decrypt_wal_full
 
 _zstd_dctx = zstd.ZstdDecompressor()
 
