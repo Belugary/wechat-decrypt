@@ -101,7 +101,7 @@ def main():
         print("[*] 开始解密全部数据库...")
         print()
         from decrypt_db import main as decrypt_all
-        decrypt_all()
+        decrypt_all(sys.argv[2:])
     elif cmd == "web":
         print("[*] 启动 Web UI...")
         print()
@@ -111,8 +111,10 @@ def main():
         print(f"[!] 未知命令: {cmd}")
         print()
         print("用法:")
-        print("  python main.py          启动实时消息监听 (Web UI)")
-        print("  python main.py decrypt  解密全部数据库到 decrypted/")
+        print("  python main.py                      启动实时消息监听 (Web UI)")
+        print("  python main.py decrypt              解密全部数据库到 decrypted/(不含 WAL)")
+        print("  python main.py decrypt --with-wal   解密 + 合并 WAL,获得当天最新消息")
+        print("  python main.py decrypt --help       查看 decrypt 全部选项(--db-dir / --keys-file / --out-dir 等)")
         sys.exit(1)
 
 

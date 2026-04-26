@@ -99,6 +99,18 @@ python3 decrypt_db.py
 
 程序会自动完成：配置检测 → 内存扫描提取密钥 → 解密。首次运行会自动检测微信数据目录并生成 `config.json`。微信只要在运行中即可，无需重启或重新登录。
 
+`decrypt` 子命令默认只解密 `.db` 静态文件；当天微信尚未 checkpoint 进 `.db`、还驻留在 `.db-wal` 缓冲里的最新消息**不会**进入产物。如果需要"产物即时反映当下消息"（典型场景：定时把数据导给下游分析/搜索/归档管线），加 `--with-wal`：
+
+```bash
+python main.py decrypt --with-wal
+```
+
+`--with-wal` 是 opt-in,默认关闭以保持向后兼容（已有依赖 `decrypt` 产物稳定性的脚本不受影响）。
+
+`decrypt` 还支持 `--db-dir` / `--keys-file` / `--out-dir` 覆盖 `config.json` 的对应字段,方便在多账号、CI、或不引入 `config.json` 的环境下使用。`python main.py decrypt --help` 查看完整选项。
+
+退出码：`0` = 全部成功；`1` = 至少一个 DB 解密失败；`2` = 所有 DB 解密成功但启用 `--with-wal` 时部分 WAL 合并失败（产物可用，仅当天最新消息缺失），方便下游脚本区分"完全 fresh"与"部分 stale"。
+
 如果自动检测失败（例如微信安装在非默认位置），手动创建 `config.json`：
 ```json
 {

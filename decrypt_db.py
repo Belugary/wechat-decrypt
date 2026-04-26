@@ -5,7 +5,7 @@ WeChat 4.0 数据库解密器
 参数: SQLCipher 4, AES-256-CBC, HMAC-SHA512, reserve=80, page_size=4096
 密钥来源: all_keys.json (由find_all_keys.py从内存提取)
 """
-import hashlib, struct, os, sys, json, time
+import argparse, hashlib, struct, os, sys, json, time
 import hmac as hmac_mod
 from Crypto.Cipher import AES
 
@@ -89,6 +89,10 @@ def decrypt_wal_full(wal_path, out_path, enc_key):
 
     WAL 是预分配固定大小（4MB），包含当前有效 frame 和上一轮遗留的旧 frame。
     通过 WAL header 中的 salt 值区分：只有 frame header 的 salt 匹配 WAL header 的才是有效 frame。
+
+    out_path 以 'r+b' 原地 patch：异常发生时已写入的 page 落盘但后续未写，产物
+    会停在"部分 patch"状态。这不需要手动回滚 —— 下一次 full_decrypt() / 调用方
+    重跑会以 'wb' truncate 重写整个 .db，半 patch 状态自愈。
 
     返回: (patched_pages, elapsed_ms)
     """
@@ -190,32 +194,83 @@ def decrypt_database(db_path, out_path, enc_key):
     return True
 
 
-def main():
+def main(argv=None):
+    """批量解密微信 4.x 加密数据库。
+
+    退出码:
+      0 — 全部 DB 解密成功;若启用 --with-wal,所有 WAL 也合并成功
+      1 — 至少一个 DB 解密失败(或 SKIP / SQLite 校验失败)
+      2 — 所有 DB 解密成功但启用 --with-wal 时部分 WAL 合并失败
+    """
+    parser = argparse.ArgumentParser(
+        prog="decrypt_db",
+        description="批量解密微信 4.x 加密数据库到明文目录",
+    )
+    parser.add_argument(
+        "--with-wal",
+        action="store_true",
+        help="解密后把 WAL 合并进明文 DB(获得当天最新消息)。默认不合并以保持向后兼容。",
+    )
+    parser.add_argument(
+        "--db-dir",
+        default=None,
+        help=f"加密 DB 根目录,覆盖 config.json 的 db_dir(默认: {DB_DIR})",
+    )
+    parser.add_argument(
+        "--keys-file",
+        default=None,
+        help=f"密钥 JSON 路径,覆盖 config.json 的 keys_file(默认: {KEYS_FILE})",
+    )
+    parser.add_argument(
+        "--out-dir",
+        default=None,
+        help=f"明文输出根目录,覆盖 config.json 的 decrypted_dir(默认: {OUT_DIR})",
+    )
+    args = parser.parse_args(argv)
+
+    db_dir = args.db_dir or DB_DIR
+    keys_file = args.keys_file or KEYS_FILE
+    out_dir = args.out_dir or OUT_DIR
+    with_wal = args.with_wal
+
     print("=" * 60)
     print("  WeChat 4.0 数据库解密器")
     print("=" * 60)
 
+    if not with_wal:
+        print(
+            "[NOTE] 未启用 --with-wal,WAL 缓冲中的最新消息不会进入产物;"
+            "若需当天最新数据请加 --with-wal",
+            file=sys.stderr,
+        )
+
+    # 校验 db_dir 存在(否则 os.walk 会静默返回空,exit 0,
+    # 让用户误以为"全部成功"但其实根本没扫到 .db)
+    if not os.path.isdir(db_dir):
+        print(f"[ERROR] DB 目录不存在或不可访问: {db_dir}", file=sys.stderr)
+        sys.exit(1)
+
     # 加载密钥
-    if not os.path.exists(KEYS_FILE):
-        print(f"[ERROR] 密钥文件不存在: {KEYS_FILE}")
+    if not os.path.exists(keys_file):
+        print(f"[ERROR] 密钥文件不存在: {keys_file}")
         print("请先运行 find_all_keys.py")
         sys.exit(1)
 
-    with open(KEYS_FILE, encoding="utf-8") as f:
+    with open(keys_file, encoding="utf-8") as f:
         keys = json.load(f)
 
     keys = strip_key_metadata(keys)
     print(f"\n加载 {len(keys)} 个数据库密钥")
-    print(f"输出目录: {OUT_DIR}")
-    os.makedirs(OUT_DIR, exist_ok=True)
+    print(f"输出目录: {out_dir}")
+    os.makedirs(out_dir, exist_ok=True)
 
     # 收集所有DB文件
     db_files = []
-    for root, dirs, files in os.walk(DB_DIR):
+    for root, dirs, files in os.walk(db_dir):
         for f in files:
             if f.endswith('.db') and not f.endswith('-wal') and not f.endswith('-shm'):
                 path = os.path.join(root, f)
-                rel = os.path.relpath(path, DB_DIR)
+                rel = os.path.relpath(path, db_dir)
                 sz = os.path.getsize(path)
                 db_files.append((rel, path, sz))
 
@@ -225,6 +280,8 @@ def main():
 
     success = 0
     failed = 0
+    wal_merged = 0
+    wal_failed = 0
     total_bytes = 0
 
     for rel, path, sz in db_files:
@@ -235,35 +292,65 @@ def main():
             continue
 
         enc_key = bytes.fromhex(key_info["enc_key"])
-        out_path = os.path.join(OUT_DIR, rel)
+        out_path = os.path.join(out_dir, rel)
 
         print(f"解密: {rel} ({sz/1024/1024:.1f}MB) ...", end=" ")
 
         ok = decrypt_database(path, out_path, enc_key)
-        if ok:
-            # SQLite验证
-            try:
-                import sqlite3
-                conn = sqlite3.connect(out_path)
-                tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
-                conn.close()
-                table_names = [t[0] for t in tables]
-                print(f"  OK! 表: {', '.join(table_names[:5])}", end="")
-                if len(table_names) > 5:
-                    print(f" ...共{len(table_names)}个", end="")
-                print()
-                success += 1
-                total_bytes += sz
-            except Exception as e:
-                print(f"  [WARN] SQLite验证失败: {e}")
-                failed += 1
-        else:
+        if not ok:
             failed += 1
+            continue
+
+        # SQLite验证
+        try:
+            import sqlite3
+            conn = sqlite3.connect(out_path)
+            tables = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            conn.close()
+            table_names = [t[0] for t in tables]
+            print(f"  OK! 表: {', '.join(table_names[:5])}", end="")
+            if len(table_names) > 5:
+                print(f" ...共{len(table_names)}个", end="")
+            print()
+            success += 1
+            total_bytes += sz
+        except Exception as e:
+            print(f"  [WARN] SQLite验证失败: {e}")
+            failed += 1
+            continue
+
+        # WAL 合并(opt-in)
+        if with_wal:
+            wal_path = path + "-wal"
+            if not os.path.exists(wal_path):
+                continue
+            try:
+                patched, ms = decrypt_wal_full(wal_path, out_path, enc_key)
+                if patched > 0:
+                    print(f"  WAL: 合并 {patched} pages ({ms:.0f}ms)")
+                wal_merged += 1
+            except Exception as e:
+                print(
+                    f"[WARN] {rel}: DB 解密成功,WAL 合并失败: {e}",
+                    file=sys.stderr,
+                )
+                print(
+                    "       该 DB 当天最新消息可能缺失",
+                    file=sys.stderr,
+                )
+                wal_failed += 1
 
     print(f"\n{'='*60}")
     print(f"结果: {success} 成功, {failed} 失败, 共 {len(db_files)} 个")
+    if with_wal:
+        print(f"WAL: {wal_merged} 合并, {wal_failed} 失败")
     print(f"解密数据量: {total_bytes/1024/1024/1024:.1f}GB")
-    print(f"解密文件在: {OUT_DIR}")
+    print(f"解密文件在: {out_dir}")
+
+    if failed > 0:
+        sys.exit(1)
+    if wal_failed > 0:
+        sys.exit(2)
 
 
 if __name__ == '__main__':
