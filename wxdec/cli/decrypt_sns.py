@@ -9,16 +9,18 @@
   2. content 可能是: 纯 XML / hex 字符串 / base64 字符串 / zstd 压缩字节
   3. 解码为 UTF-8 XML 后, 提取 TimelineObject 的关键字段(createTime / contentDesc / media / 等)
   4. 按用户 wxid 与时间范围过滤, 输出
+  5. (可选 --decrypt-media)拉 CDN URL + 用 sns_isaac XOR 解密 + 落盘 <md5>.<ext>
 
 朋友圈 XML 解析独立重写, 参考来源:
   - LifeArchiveProject/WeChatDataAnalysis (XML 多层编码、伪 XML 净化、TimelineObject 字段)
 
-媒体 ISAAC-64 keystream + XOR 解密在 sns_isaac.py 单独实现; 本脚本只输出
-带 url/key/token 的元数据 JSON, 解密由调用方按需触发(参见 sns_isaac.py)。
+媒体下载 + 解密在 --decrypt-media 模式下进行, 协议参考:
+  - https://github.com/teest114514/chatlog_alpha (URL fix 规则: /150→/0, ?token&idx=1)
+  - https://github.com/hicccc77/WeFlow (CDN 必须 `User-Agent: MicroMessenger Client`)
+ISAAC-64 keystream 生成由 sns_isaac.py 提供; 本脚本不依赖 WASM, 纯 Python clean-room。
 
 未实现 (留待后续):
-  - 把 sns_isaac 集成进来做 --decrypt-media 批量下载
-  - 视频与公众号文章封面拉取
+  - 视频与公众号文章封面拉取(sns_isaac.decrypt_video_in_place 已具备底层能力)
   - 评论 / 点赞列表展开
 """
 import argparse
@@ -30,6 +32,8 @@ import os
 import re
 import sqlite3
 import sys
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -358,6 +362,178 @@ def _resolve_self_wxid(db_path: str, candidate: Optional[str]) -> Optional[str]:
     return None
 
 
+# ---------- media download + decrypt (--decrypt-media 模式) ----------
+
+# WeChat CDN(szmmsns.qpic.cn)拒绝非 MicroMessenger UA, 即便带正确 token。
+# 浏览器 / curl 默认 UA 一律 400。来源: WeFlow snsService.ts。
+_SNS_UA = "MicroMessenger Client"
+_DEFAULT_TIMEOUT = 30
+_DEFAULT_MAX_BYTES = 20 * 1024 * 1024
+
+
+def _fix_sns_url(raw_url: str, token: str) -> str:
+    """规范化 SNS CDN URL 以便能拿到全图原始字节。
+
+    三件事(来源: chatlog_alpha):
+      - http -> https(腾讯 CDN 已强制 TLS)
+      - 路径以 /150 结尾(thumb 缩略图, referer-locked)→ 改 /0(全图)
+      - query 加 ?token=<token>&idx=1(CDN 签名)
+    """
+    if not raw_url:
+        return raw_url
+    fixed = raw_url.replace("http://", "https://", 1)
+    if fixed.endswith("/150"):
+        fixed = fixed[:-4] + "/0"
+    elif fixed.endswith("/150/"):
+        fixed = fixed[:-5] + "/0"
+    if token and "token=" not in fixed:
+        sep = "&" if "?" in fixed else "?"
+        fixed = f"{fixed}{sep}token={token}&idx=1"
+    return fixed
+
+
+def _detect_image_ext(data: bytes) -> Optional[str]:
+    """Return file extension based on magic bytes; None if unknown.
+
+    Mirrors sns_isaac.detect_image_kind but returns the on-disk ext rather
+    than the format name.
+    """
+    if not data or len(data) < 8:
+        return None
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WEBP":
+        return "webp"
+    if data[:2] == b"BM":
+        return "bmp"
+    return None
+
+
+def _download_and_decrypt_one(
+    raw_url: str,
+    token: str,
+    key: str,
+    md5: str,
+    out_dir: str,
+    *,
+    timeout: int = _DEFAULT_TIMEOUT,
+    max_size: int = _DEFAULT_MAX_BYTES,
+) -> tuple[Optional[str], str]:
+    """下载一张 SNS 图、用 ISAAC-64 keystream XOR 解密、落盘 <out_dir>/<md5>.<ext>。
+
+    命名取 urlAttrs.md5(每张图独立, 全局去重); key 是同一帖子内多张图共享的
+    ISAAC seed, 不能用于命名。同一张图被多次发送 → md5 一致 → 只存一份。
+
+    幂等: out_dir 下已有 <md5>.* 时直接返回该路径(状态 "skip-existing")。
+    安全: 写 <md5>.<ext>.part, 解密 + magic 校验通过后 rename, 失败不污染目标。
+
+    Returns (saved_path_or_none, status_string)。状态字符串前缀:
+      ok / skip-* / error-*
+    """
+    if not raw_url:
+        return None, "skip-no-url"
+    if not key or str(key) in ("0", ""):
+        return None, "skip-no-key"
+    if not md5:
+        return None, "skip-no-md5"
+
+    # idempotency: any existing <md5>.* counts as "already done".
+    existing = glob.glob(os.path.join(out_dir, f"{md5}.*"))
+    existing = [p for p in existing if not p.endswith(".part")]
+    if existing:
+        return existing[0], "skip-existing"
+
+    fixed_url = _fix_sns_url(raw_url, token)
+    req = urllib.request.Request(
+        fixed_url,
+        headers={"User-Agent": _SNS_UA, "Accept": "*/*", "Connection": "keep-alive"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            x_enc = resp.headers.get("X-Enc", "").strip()
+            cl = resp.headers.get("Content-Length")
+            if cl and int(cl) > max_size:
+                return None, "error-too-big"
+            payload = resp.read(max_size + 1)
+            if len(payload) > max_size:
+                return None, "error-too-big"
+    except urllib.error.HTTPError as e:
+        return None, f"error-http-{e.code}"
+    except urllib.error.URLError as e:
+        return None, f"error-url"
+
+    if x_enc == "1":
+        # In-process XOR decrypt; sns_isaac is a pure-Python module, no WASM.
+        from wxdec.sns_isaac import decrypt_image_bytes
+        try:
+            data = decrypt_image_bytes(payload, key)
+        except Exception as e:
+            print(f"[!] decrypt failed for key={key}: {e}", file=sys.stderr)
+            return None, "error-decrypt"
+    else:
+        # No X-Enc header → either CDN returned a non-encrypted variant or this
+        # url isn't an encrypted resource at all. Try as-is; magic check below
+        # is the final gate.
+        data = payload
+
+    ext = _detect_image_ext(data)
+    if not ext:
+        return None, "error-bad-magic"
+
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"{md5}.{ext}")
+    tmp_path = out_path + ".part"
+    with open(tmp_path, "wb") as f:
+        f.write(data)
+    os.replace(tmp_path, out_path)
+    return out_path, "ok"
+
+
+def decrypt_media_for_posts(posts: list, out_dir: str) -> dict:
+    """按帖子遍历 media 项, 下载 + 解密 + 落盘, mutate `media` dict 加 `localPath`。
+
+    只处理图片(media.type == 2; type 6 是视频先跳过, 留给将来 sns_isaac.decrypt_video_in_place)。
+    """
+    counts: dict[str, int] = {}
+    saved = errors = total = 0
+
+    for post in posts:
+        for m in post.get("media", []):
+            mtype = m.get("type")
+            if mtype not in (1, 2):
+                continue
+            url = m.get("url") or ""
+            attrs = m.get("urlAttrs", {}) or {}
+            key = str(attrs.get("key", ""))
+            token = str(attrs.get("token", ""))
+            md5 = str(attrs.get("md5", ""))
+
+            total += 1
+            saved_path, status = _download_and_decrypt_one(url, token, key, md5, out_dir)
+            counts[status] = counts.get(status, 0) + 1
+            if saved_path:
+                m["localPath"] = saved_path
+            if status == "ok":
+                saved += 1
+            elif status.startswith("error"):
+                errors += 1
+
+    skipped = total - saved - errors
+    print(
+        f"[+] SNS 媒体: 共 {total} 张, 解密 {saved}, 跳过 {skipped}, 失败 {errors}",
+        file=sys.stderr,
+    )
+    if counts:
+        detail = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+        print(f"    分项: {detail}", file=sys.stderr)
+    return {"total": total, "saved": saved, "skipped": skipped, "errors": errors,
+            "detail": counts}
+
+
 def _build_argparser(path_hint: Optional[str], default_decrypted_dir: str) -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="decrypt_sns.py",
@@ -381,6 +557,16 @@ def _build_argparser(path_hint: Optional[str], default_decrypted_dir: str) -> ar
     p.add_argument("--end", help="结束日期(不含, UTC), 形如 2024-06-16")
     p.add_argument("--limit", type=int, default=None, help="最多输出条数")
     p.add_argument("--include-cover", action="store_true", help="包含 type=7 封面背景图(默认排除)")
+    p.add_argument(
+        "--decrypt-media",
+        action="store_true",
+        help="拉 CDN URL + 用 sns_isaac XOR 解密原图, 落盘 <image-out-dir>/<key>.<ext>",
+    )
+    p.add_argument(
+        "--image-out-dir",
+        default=None,
+        help="解密后图片落盘目录(默认 <decoded_image_dir>/sns/)",
+    )
     p.add_argument("-o", "--output", help="JSON 输出文件路径(默认 stdout)")
     return p
 
@@ -448,6 +634,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         include_cover=args.include_cover,
         limit=args.limit,
     )
+
+    if args.decrypt_media:
+        decoded_image_dir = cfg.get("decoded_image_dir") or "decoded_images"
+        decoded_image_dir = os.path.expanduser(decoded_image_dir)
+        out_dir = args.image_out_dir or os.path.join(decoded_image_dir, "sns")
+        out_dir = os.path.expanduser(out_dir)
+        print(f"[*] 解密 SNS 媒体到: {out_dir}", file=sys.stderr)
+        decrypt_media_for_posts(posts, out_dir)
 
     payload = json.dumps(posts, ensure_ascii=False, indent=2)
     if args.output:
