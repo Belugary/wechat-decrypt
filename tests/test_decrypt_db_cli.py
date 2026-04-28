@@ -159,6 +159,30 @@ class WithWalFlagTests(unittest.TestCase):
         # stderr 里可能有别的(测试工具自身)但不应包含"未启用 --with-wal"
         self.assertNotIn("未启用 --with-wal", res["stderr"])
 
+    def _seed_residuals(self, rel):
+        """在 out_dir 预置 -shm/-wal,模拟 sqlite3 验证连接的副作用。"""
+        out_db = os.path.join(self.h.out_dir, rel)
+        os.makedirs(os.path.dirname(out_db), exist_ok=True)
+        for suffix in ("-shm", "-wal"):
+            with open(out_db + suffix, "wb") as f:
+                f.write(b"stale")
+        return out_db
+
+    def test_residuals_cleaned_after_with_wal(self):
+        """--with-wal 路径走完后应清理 -shm/-wal 残留。"""
+        out_db = self._seed_residuals("session/session.db")
+        self.h.make_wal("session/session.db")
+        self._run(self.h.argv_base() + ["--with-wal"])
+        self.assertFalse(os.path.exists(out_db + "-shm"))
+        self.assertFalse(os.path.exists(out_db + "-wal"))
+
+    def test_residuals_cleaned_without_with_wal(self):
+        """默认路径(无 --with-wal)也应清理残留,因为 sqlite3 验证仍会跑。"""
+        out_db = self._seed_residuals("session/session.db")
+        self._run(self.h.argv_base())
+        self.assertFalse(os.path.exists(out_db + "-shm"))
+        self.assertFalse(os.path.exists(out_db + "-wal"))
+
 
 class CliOverrideTests(unittest.TestCase):
     """--db-dir / --keys-file / --out-dir 覆盖模块级 config 默认值。"""

@@ -322,23 +322,32 @@ def main(argv=None):
         # WAL 合并(opt-in)
         if with_wal:
             wal_path = path + "-wal"
-            if not os.path.exists(wal_path):
-                continue
-            try:
-                patched, ms = decrypt_wal_full(wal_path, out_path, enc_key)
-                if patched > 0:
-                    print(f"  WAL: 合并 {patched} pages ({ms:.0f}ms)")
-                wal_merged += 1
-            except Exception as e:
-                print(
-                    f"[WARN] {rel}: DB 解密成功,WAL 合并失败: {e}",
-                    file=sys.stderr,
-                )
-                print(
-                    "       该 DB 当天最新消息可能缺失",
-                    file=sys.stderr,
-                )
-                wal_failed += 1
+            if os.path.exists(wal_path):
+                try:
+                    patched, ms = decrypt_wal_full(wal_path, out_path, enc_key)
+                    if patched > 0:
+                        print(f"  WAL: 合并 {patched} pages ({ms:.0f}ms)")
+                    wal_merged += 1
+                except Exception as e:
+                    print(
+                        f"[WARN] {rel}: DB 解密成功,WAL 合并失败: {e}",
+                        file=sys.stderr,
+                    )
+                    print(
+                        "       该 DB 当天最新消息可能缺失",
+                        file=sys.stderr,
+                    )
+                    wal_failed += 1
+
+        # 清理 sqlite3 验证连接遗留的 -shm/-wal 空文件
+        # 避免 SQLite 后续打开 .db 时优先读旧 WAL 报 "database disk image is malformed"
+        for suffix in ("-shm", "-wal"):
+            residual = out_path + suffix
+            if os.path.exists(residual):
+                try:
+                    os.remove(residual)
+                except OSError:
+                    pass
 
     print(f"\n{'='*60}")
     print(f"结果: {success} 成功, {failed} 失败, 共 {len(db_files)} 个")
