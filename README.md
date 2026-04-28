@@ -347,3 +347,13 @@ python3 decrypt_db.py
 ## 免责声明
 
 本工具仅用于学习和研究目的，用于解密**自己的**微信数据。请遵守相关法律法规，不要用于未经授权的数据访问。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)，欢迎二次开发和借鉴。
+
+## 致谢
+
+- [ylytdeng/wechat-decrypt](https://github.com/ylytdeng/wechat-decrypt) — 本仓库 fork 的上游，提供 SQLCipher 解密、密钥提取等核心能力。
+- [LifeArchiveProject/WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis) — 朋友圈（SNS）解析与媒体解密能力的参考实现。本项目相关模块在算法层独立重写以适配 macOS / 纯 CLI 形态。
+- [hicccc77/WeFlow](https://github.com/hicccc77/WeFlow) — 朋友圈媒体 ISAAC-64 keystream 算法的权威参考。
