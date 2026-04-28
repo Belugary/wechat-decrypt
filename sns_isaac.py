@@ -15,7 +15,11 @@ WASM 实测 keystream 作为 ground truth, 4/4 通过)。
 
 朋友圈媒体规则(微信 4.x):
   - 图片: 整文件 XOR keystream
-  - 视频: 仅前 131072 字节(64 个 ISAAC 块)XOR, 余下原样, 解密后 offset 4 应是 b'ftyp'
+  - 视频: 仅前 131072 字节(64 个完整 ISAAC 块)XOR, 余下原样, 解密后 offset 4 应是 b'ftyp'
+
+视频 128KB 这个常数没有官方文档, 据 wx_channel + WeFlow WASM 实测推导。
+若日后微信调整加密范围, 视频解密会失败但原文件不会被破坏(decrypt_video_in_place
+解密后先校验 ftyp, 校验通过才回写)。
 
 种子格式: XML 中 `<url>` / `<enc>` 标签的 attr `key="14970291265290127678"`,
         十进制数字字符串 -> int(s, 0) -> 64-bit 截断 -> 仅填到 randrsl[0]。
@@ -65,6 +69,11 @@ class Isaac64:
             try:
                 seed_val = int(s, 0)
             except ValueError:
+                # 静默降级到 0 会让 Isaac64("abc") 与 Isaac64("0") 产生同一 keystream,
+                # 调试时极易掩盖 seed 取错的真因(比如从 XML 复制时多了个空白字符)。
+                # 给一行 stderr 警告, 不抛异常以保留 caller 兼容性。
+                print(f"[!] sns_isaac: seed {s!r} 不是合法 int / hex, 降级到 0; keystream 将无意义",
+                      file=sys.stderr)
                 seed_val = 0
 
         self.mm = [0] * 256
@@ -213,7 +222,11 @@ def detect_mp4(buf: bytes) -> bool:
 
 
 def decrypt_video_in_place(path: Path, key: str) -> bool:
-    """视频前 128KB XOR 后回写; 返回是否成功(以 ftyp 校验)。"""
+    """视频前 128KB XOR 后回写; 返回是否成功(以 ftyp 校验)。
+
+    安全保证: 解密在内存 buffer 中完成, **校验 ftyp 通过才回写**。
+    seed 错误 / 文件损坏时不动原文件, 调用方可放心重试。
+    """
     if not str(key or "").strip():
         return False
     size = path.stat().st_size
@@ -221,20 +234,25 @@ def decrypt_video_in_place(path: Path, key: str) -> bool:
         return False
 
     n = min(SNS_VIDEO_HEAD_SIZE, size)
-    with path.open("r+b") as f:
+    with path.open("rb") as f:
         head_check = f.read(8)
         if detect_mp4(head_check):
-            return False  # 已经是明文, 不要重复 XOR
+            return False  # 已经是明文, 不重复 XOR
         f.seek(0)
         head = bytearray(f.read(n))
-        ks = Isaac64(key).generate_keystream(n)
-        for i in range(n):
-            head[i] ^= ks[i]
-        f.seek(0)
+
+    ks = Isaac64(key).generate_keystream(n)
+    for i in range(n):
+        head[i] ^= ks[i]
+
+    # 在 buffer 里校验, 通过才回写。失败时原文件保持不变。
+    if not detect_mp4(bytes(head[:8])):
+        return False
+
+    with path.open("r+b") as f:
         f.write(bytes(head))
         f.flush()
-        f.seek(0)
-        return detect_mp4(f.read(8))
+    return True
 
 
 # ---------- self-test ----------
