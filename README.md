@@ -2,18 +2,12 @@
 
 微信 4.0 (Windows、MacOS、Linux) 本地数据库解密工具。从运行中的微信进程内存提取加密密钥，解密所有 SQLCipher 4 加密数据库，并提供实时消息监听。
 
-## 更新日志
+## 本 fork 相对原项目的增强
 
-## 防失联tg: https://t.me/wechat_decrypt
-
-### 2025-03-03 — 富媒体内容 & 组合消息修复
-
-- **表情包内联显示**: 自动从 emoticon.db 构建 MD5→CDN 映射，支持自定义表情（NonStore）和商店表情（Store），CDN 下载后本地缓存
-- **富媒体内容解析**: 链接卡片（type 49）、文件、视频号、小程序、引用回复、位置分享等在 Web UI 中完整渲染
-- **文字+图片组合消息不再丢失**: 修复同时发送文字和图片时只显示最后一条的问题（前端去重 key 增加消息类型）
-- **隐藏消息检测**: 新增 `_check_hidden_messages` 机制，session.db 只保存最后一条消息摘要，现在会异步查 message DB 找回同一秒内的其他消息
-- **MonitorDBCache 线程安全**: 引入 per-key 锁，防止多线程并发解密同一数据库导致文件损坏
-- **Web UI 改进**: 消息气泡样式优化、群聊发送者显示、图片缩略图点击放大
+- **`decrypt --with-wal` + CLI override + 分级退出码** — `decrypt` 子命令可把当天 `.db-wal` 缓冲里尚未 checkpoint 的最新消息合进产物（opt-in，默认关闭以保持向后兼容）；新增 `--db-dir` / `--keys-file` / `--out-dir` 覆盖 `config.json`，方便多账号 / CI / 容器化场景；退出码 `0` / `1` / `2` 区分"完全 fresh"、"DB 解密失败"、"产物可用但 WAL 部分 stale"。详见 [快速开始](#快速开始)。
+- **`decode-images` 子命令** — 一次性把所有 `.dat` 图片解密成明文文件树，输出镜像微信 attach 结构（`<chat_hash>/<YYYY-MM>/<file_md5>.<ext>`）。幂等可重跑、原子写、错误隔离、V2 无 key 容错；适合喂下游分析 / 搜索 / 归档管线。详见 [批量解密所有图片](#批量解密所有图片)。
+- **macOS 图片密钥派生（无需扫描进程内存）** — 从磁盘 kvcomm 缓存推算 AES key，免重签名、免 root、免提前在微信里查看图片，解决 macOS 内存扫描器候选爆炸的老问题。详见 [图片解密 (V2 格式)](#图片解密-v2-格式)。
+- **`config.json` 路径支持 `~` 展开** — `db_dir` / `keys_file` / `decrypted_dir` 等字段可直接写 `~/Documents/...`，自动展开为家目录，跨用户 / 跨机器复用配置不再需要硬编码绝对路径。
 
 ## 原理
 
