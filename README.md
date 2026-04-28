@@ -156,5 +156,6 @@ V2 文件结构：`[6B signature] [4B aes_size LE] [4B xor_size LE] [1B padding]
 ## 致谢
 
 - [ylytdeng/wechat-decrypt](https://github.com/ylytdeng/wechat-decrypt) — 本仓库 fork 的上游，提供 SQLCipher 解密、密钥提取等核心能力
-- [LifeArchiveProject/WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis) — 朋友圈解析与媒体解密的参考实现
+- [LifeArchiveProject/WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis) — 朋友圈 XML 解析与时间线结构的参考实现
+- [nobiyou/wx_channel](https://github.com/nobiyou/wx_channel) (MIT) — `pkg/util/isaac64.go` 提供了 WeFlow `WxIsaac64` 的 Go clean-room 实现，本仓库 [sns_isaac.py](sns_isaac.py) 据此移植到 Python（关键差异：PHI 常数尾字节是 `0x13` 而非标准 ISAAC-64 的 `0x15`）
 - [hicccc77/WeFlow](https://github.com/hicccc77/WeFlow) — 朋友圈媒体 ISAAC-64 keystream 与 macOS 图片密钥派生算法的权威参考

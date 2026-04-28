@@ -10,12 +10,14 @@
   3. 解码为 UTF-8 XML 后, 提取 TimelineObject 的关键字段(createTime / contentDesc / media / 等)
   4. 按用户 wxid 与时间范围过滤, 输出
 
-朋友圈解析与媒体解密的算法层独立重写, 参考来源:
+朋友圈 XML 解析独立重写, 参考来源:
   - LifeArchiveProject/WeChatDataAnalysis (XML 多层编码、伪 XML 净化、TimelineObject 字段)
-  - hicccc77/WeFlow (媒体 ISAAC-64 keystream, 本骨架暂不涉及)
+
+媒体 ISAAC-64 keystream + XOR 解密在 sns_isaac.py 单独实现; 本脚本只输出
+带 url/key/token 的元数据 JSON, 解密由调用方按需触发(参见 sns_isaac.py)。
 
 未实现 (留待后续):
-  - 媒体下载与解密 (ISAAC-64 + XOR)
+  - 把 sns_isaac 集成进来做 --decrypt-media 批量下载
   - 视频与公众号文章封面拉取
   - 评论 / 点赞列表展开
 """
