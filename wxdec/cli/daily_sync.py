@@ -1,9 +1,9 @@
 """
-wechat-decrypt 每日自动同步入口 — 由外部 OS 调度器(launchd / systemd-user /
+wx-data-toolkit 每日自动同步入口 — 由外部 OS 调度器(launchd / systemd-user /
 schtasks)触发, 串联本项目的三件套:
 
-  1. python main.py decrypt --with-wal           (DB 解密, 用 cached key 不需 sudo)
-  2. python main.py decode-images                 (.dat → 明文图片镜像树)
+  1. python main.py decrypt --with-wal           (DB 导出, 用 cached key 不需 sudo)
+  2. python main.py decode-images                 (.dat → 标准格式图片镜像树)
   3. python -m wxdec.cli.decrypt_sns
        --start <today-7d> --decrypt-media         (朋友圈图: CDN ~5d 窗口期内本地化)
 
@@ -17,7 +17,7 @@ schtasks)触发, 串联本项目的三件套:
 systemd 的 journal / schtasks 的 .bat 重定向)负责落到具体日志文件。
 
 设计原则:
-  - 步骤 1 / 2 任一失败 → 整体 fail (DB / 明文图是后续步骤的输入)
+  - 步骤 1 / 2 任一失败 → 整体 fail (DB / 标准格式图是后续步骤的输入)
   - 步骤 3 失败 → log warn 但 rc 0 (朋友圈是 best-effort, 单天 CDN 抽风
     不应阻塞下次跑)
 """

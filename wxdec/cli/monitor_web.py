@@ -1,9 +1,9 @@
 """
-微信实时消息监听器 - Web UI (SSE推送 + mtime检测)
+微信实时消息查看器 - Web UI (SSE推送 + mtime检测)
 
 http://localhost:5678
 - 30ms轮询WAL/DB文件的mtime变化（WAL是预分配固定大小，不能用size检测）
-- 检测到变化后：全量解密DB + 全量WAL patch
+- 检测到变化后：全量导出DB + 全量WAL patch
 - SSE 服务器推送
 """
 import hashlib, os, sys, json, time, sqlite3, io, threading, queue, traceback

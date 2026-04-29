@@ -1,10 +1,10 @@
-"""从微信进程内存中提取图片 AES 密钥 (V2 .dat 格式)
+"""从微信进程获取图片 AES key (V2 .dat 格式)
 
 V2 .dat 文件结构:
   [6B signature: 07 08 V2 08 07] [4B aes_size LE] [4B xor_size LE] [1B padding]
   [aes_size bytes AES-ECB encrypted] [raw_data unencrypted] [xor_size bytes XOR encrypted]
 
-AES key: 16-byte ASCII string found in Weixin.exe process memory
+AES key: 16-byte ASCII string located in Weixin.exe process memory
 XOR key: single byte, same as old format (derived from JPEG FF D9 ending)
 
 Usage:

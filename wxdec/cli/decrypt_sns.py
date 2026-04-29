@@ -1,20 +1,20 @@
 """
 朋友圈 (SNS / Moments) 解析 CLI
 
-读取已解密的 sns.db, 按 wxid + 日期范围筛选朋友圈条目, 输出 JSON 或可读文本。
-本脚本只处理"解密后的 SQLite 文件"; 加密库的解密走项目现有的 `decrypt_db.py` 流程。
+读取已导出的 sns.db, 按 wxid + 日期范围筛选朋友圈条目, 输出 JSON 或可读文本。
+本脚本只处理"已导出的标准 SQLite 文件"; 加密库的导出走项目现有的 `decrypt_db.py` 流程。
 
 朋友圈数据流:
   1. SELECT tid, user_name, content FROM SnsTimeLine
   2. content 可能是: 纯 XML / hex 字符串 / base64 字符串 / zstd 压缩字节
   3. 解码为 UTF-8 XML 后, 提取 TimelineObject 的关键字段(createTime / contentDesc / media / 等)
   4. 按用户 wxid 与时间范围过滤, 输出
-  5. (可选 --decrypt-media)拉 CDN URL + 用 sns_isaac XOR 解密 + 落盘 <md5>.<ext>
+  5. (可选 --decrypt-media)拉 CDN URL + 用 sns_isaac XOR 还原 + 落盘 <md5>.<ext>
 
 朋友圈 XML 解析独立重写, 参考来源:
   - LifeArchiveProject/WeChatDataAnalysis (XML 多层编码、伪 XML 净化、TimelineObject 字段)
 
-媒体下载 + 解密在 --decrypt-media 模式下进行, 协议参考:
+媒体下载 + 还原在 --decrypt-media 模式下进行, 协议参考:
   - https://github.com/teest114514/chatlog_alpha (URL fix 规则: /150→/0, ?token&idx=1)
   - https://github.com/hicccc77/WeFlow (CDN 必须 `User-Agent: MicroMessenger Client`)
 ISAAC-64 keystream 生成由 sns_isaac.py 提供; 本脚本不依赖 WASM, 纯 Python clean-room。
@@ -212,7 +212,7 @@ def parse_timeline_xml(xml_text: str, fallback_username: str = "") -> dict[str, 
 
 
 def resolve_sns_db(decrypted_dir: str, override: Optional[str]) -> str:
-    """定位已解密的 sns.db 文件路径。
+    """定位已导出的 sns.db 文件路径。
 
     优先级:
       1. override (--db 参数) 显式指定
@@ -239,7 +239,7 @@ def resolve_sns_db(decrypted_dir: str, override: Optional[str]) -> str:
 
     raise FileNotFoundError(
         f"在 {decrypted_dir} 下找不到朋友圈数据库; "
-        f"请先运行 `python main.py decrypt` 解密, 或用 --db 显式指定路径"
+        f"请先运行 `python main.py decrypt` 导出, 或用 --db 显式指定路径"
     )
 
 
@@ -524,7 +524,7 @@ def decrypt_media_for_posts(posts: list, out_dir: str) -> dict:
 
     skipped = total - saved - errors
     print(
-        f"[+] SNS 媒体: 共 {total} 张, 解密 {saved}, 跳过 {skipped}, 失败 {errors}",
+        f"[+] SNS 媒体: 共 {total} 张, 还原 {saved}, 跳过 {skipped}, 失败 {errors}",
         file=sys.stderr,
     )
     if counts:
@@ -537,11 +537,11 @@ def decrypt_media_for_posts(posts: list, out_dir: str) -> dict:
 def _build_argparser(path_hint: Optional[str], default_decrypted_dir: str) -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="decrypt_sns.py",
-        description="按 wxid + 日期筛选朋友圈, 输出 JSON。需要先 `python main.py decrypt` 把 sns.db 解密出来。",
+        description="按 wxid + 日期筛选朋友圈, 输出 JSON。需要先 `python main.py decrypt` 把 sns.db 导出。",
     )
     p.add_argument(
         "--db",
-        help=f"已解密的 sns.db 路径(默认在 {default_decrypted_dir}/sns/ 下查找)",
+        help=f"已导出的 sns.db 路径(默认在 {default_decrypted_dir}/sns/ 下查找)",
     )
     p.add_argument(
         "--user",
@@ -560,12 +560,12 @@ def _build_argparser(path_hint: Optional[str], default_decrypted_dir: str) -> ar
     p.add_argument(
         "--decrypt-media",
         action="store_true",
-        help="拉 CDN URL + 用 sns_isaac XOR 解密原图, 落盘 <image-out-dir>/<key>.<ext>",
+        help="拉 CDN URL + 用 sns_isaac XOR 还原原图, 落盘 <image-out-dir>/<key>.<ext>",
     )
     p.add_argument(
         "--image-out-dir",
         default=None,
-        help="解密后图片落盘目录(默认 <decoded_image_dir>/sns/)",
+        help="还原后图片落盘目录(默认 <decoded_image_dir>/sns/)",
     )
     p.add_argument("-o", "--output", help="JSON 输出文件路径(默认 stdout)")
     return p
@@ -640,7 +640,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         decoded_image_dir = os.path.expanduser(decoded_image_dir)
         out_dir = args.image_out_dir or os.path.join(decoded_image_dir, "sns")
         out_dir = os.path.expanduser(out_dir)
-        print(f"[*] 解密 SNS 媒体到: {out_dir}", file=sys.stderr)
+        print(f"[*] 还原 SNS 媒体到: {out_dir}", file=sys.stderr)
         decrypt_media_for_posts(posts, out_dir)
 
     payload = json.dumps(posts, ensure_ascii=False, indent=2)

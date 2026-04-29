@@ -14,14 +14,14 @@ def _load_impl():
         return impl
     if system == "darwin":
         raise RuntimeError(
-            "macOS 请先运行 C 版扫描器提取密钥：\n"
+            "macOS 请先运行 C 版扫描器获取访问凭据：\n"
             "\n"
             "    sudo ./find_all_keys_macos\n"
             "\n"
             "    完成后再运行 python main.py decrypt"
         )
     raise RuntimeError(
-        f"当前平台暂不支持通过 find_all_keys.py 提取密钥: {platform.system()}"
+        f"当前平台暂不支持通过 find_all_keys.py 获取访问凭据: {platform.system()}"
     )
 
 

@@ -1,11 +1,11 @@
 """
-Linux 版微信数据库密钥提取
+Linux 版微信数据库访问凭据获取
 
-原理: 与 Windows/macOS 相同 — 扫描微信进程内存，查找
+原理: 与 Windows/macOS 相同 — 在微信进程的工作内存中查找
 WCDB 缓存的 x'<64hex_enc_key><32hex_salt>' 模式，
-通过匹配数据库 salt + HMAC 校验确认密钥。
+通过匹配数据库 salt + HMAC 校验确认 key。
 
-读取方式: /proc/<pid>/maps + /proc/<pid>/mem
+数据来源: /proc/<pid>/maps + /proc/<pid>/mem
 权限要求: root 或 CAP_SYS_PTRACE
 """
 import functools
@@ -152,13 +152,13 @@ def main():
     _check_permissions()
 
     print("=" * 60)
-    print("  提取 Linux 微信数据库密钥（内存扫描）")
+    print("  获取 Linux 微信数据库访问凭据（进程内存扫描）")
     print("=" * 60)
 
     # 1. 收集 DB 文件和 salt
     db_files, salt_to_dbs = collect_db_files(db_dir)
     if not db_files:
-        raise RuntimeError(f"在 {db_dir} 未找到可解密的 .db 文件")
+        raise RuntimeError(f"在 {db_dir} 未找到可读取的 .db 文件")
 
     print(f"\n找到 {len(db_files)} 个数据库, {len(salt_to_dbs)} 个不同的 salt")
     for salt_hex, dbs in sorted(salt_to_dbs.items(), key=lambda x: len(x[1]), reverse=True):
@@ -228,7 +228,7 @@ def main():
             mem.close()
 
         if not remaining_salts:
-            print(f"\n[+] 所有密钥已找到，跳过剩余进程")
+            print(f"\n[+] 所有访问凭据已获取，跳过剩余进程")
             break
 
     elapsed = time.time() - t0

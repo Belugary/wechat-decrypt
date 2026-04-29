@@ -1,19 +1,19 @@
-# macOS WeChat 密钥提取：权限与签名完全指南
+# macOS 平台权限与签名配置指南
 
 > 基于多台机器 (macOS 10.15 ~ 15.x, Intel + Apple Silicon) 的实测经验总结。
 
 ## 核心结论
 
-能否从微信进程提取加密密钥，取决于 **两个独立问题**：
+能否从微信进程获取访问凭据，取决于 **两个独立问题**：
 
 | 问题 | 控制什么 | 关键因素 |
 |------|---------|---------|
-| `task_for_pid()` 能否成功 | 读取进程内存 | **目标 App 的代码签名** |
+| `task_for_pid()` 能否成功 | 从进程获取凭据 | **目标 App 的代码签名** |
 | `codesign` 能否重签名 | 修改 App 文件 | **调用者的完全磁盘访问** |
 
 ---
 
-## 一、task_for_pid 权限（读取微信内存）
+## 一、task_for_pid 权限（从微信进程获取访问凭据）
 
 ### 决定因素：微信 App 的 Hardened Runtime
 
@@ -30,7 +30,7 @@ Signature=adhoc
 TeamIdentifier=not set
 ```
 
-**原因**: 安装过防撤回补丁等第三方修改工具，App 被重新签名。
+**原因**: App 经第三方工具重新签名（例如修改版客户端）。
 
 **权限要求**: 只需 `sudo`，任何上下文（Terminal、SSH、cron）都能成功。
 
@@ -51,39 +51,6 @@ Authority=...Apple...
 
 **权限要求**: `sudo` + 本机 GUI 终端 + TCC "开发者工具"授权。SSH **不可行**。
 
-```
-taskgated 检查流程:
-  目标有 hardened runtime?
-    YES → 检查调用者的"负责应用"是否有 TCC DeveloperTool 授权
-          SSH 的负责应用是 sshd → 无法获得 TCC 授权 → 拒绝
-          Terminal.app 可以弹窗获得授权 → 允许
-    NO  → root (sudo) 即可 → 允许
-```
-
-### 实测数据
-
-| 机器 | macOS | WeChat 签名 | 本机 Terminal sudo | SSH sudo |
-|------|-------|------------|-------------------|---------|
-| MacBook (macOS 15.x) | 15.x | **ad-hoc** (防撤回补丁) | ✅ | ✅ |
-| Mac mini (Catalina) | 10.15.8 | Apple 官方 runtime | ✅ | ❌ |
-| MacBook Pro (Big Sur) | 11.1 | Apple 官方 runtime | ✅ | ❌ |
-
-### SSH 下穷举过的所有方法（Apple 签名时全部失败）
-
-| 方法 | 结果 | 错误信息 |
-|------|------|---------|
-| `sudo frida -p <pid>` | ❌ | unable to access process |
-| `lldb -p <pid>` | ❌ | non-interactive debug session |
-| `sudo gcore <pid>` | ❌ | insufficient privilege |
-| 带 debugger entitlement 的 C 程序 | ❌ | KERN_FAILURE=5 |
-| `launchctl asuser` (用户会话) | ❌ | task_for_pid=5 |
-| LaunchAgent (Aqua GUI 会话) | ❌ | 非 root，需要 sudo |
-| LaunchDaemon (root) | ❌ | 系统域无 GUI 上下文 |
-| `launchctl submit` (root) | ❌ | 同上 |
-| `osascript` 操控 Terminal.app | ❌ | 需要辅助功能权限/挂起 |
-| 修改 TCC.db 给 sshd 授权 | ❌ | SIP 保护，restricted 只读 |
-| `vmmap` / `heap` | ⚠️ | 只能看元数据，无法读内存 |
-
 ---
 
 ## 二、codesign 权限（重签名微信 App）
@@ -98,7 +65,7 @@ $ sudo codesign --force --deep --sign - /Applications/WeChat.app
 In subcomponent: /Applications/WeChat.app/Contents/MacOS/WeChatAppEx.app
 ```
 
-**原因**: SSH 进程没有「完全磁盘访问」(Full Disk Access, FDA) 权限，无法修改 `/Applications` 下的 App bundle 文件。
+**原因**: SSH 进程没有"完全磁盘访问"(Full Disk Access, FDA) 权限，无法修改 `/Applications` 下的 App bundle 文件。
 
 ### 给 SSH 授予完全磁盘访问
 
@@ -127,7 +94,7 @@ cat ~/Library/Application\ Support/com.apple.TCC/TCC.db > /dev/null 2>&1 && echo
 
 TCC.db 是受保护文件，只有 FDA 进程能读取。
 
-### 完整流程：SSH 远程重签名微信
+### 远程场景下的权限准备
 
 ```bash
 # 0. 前提：SSH 已有 FDA（上面的步骤）
@@ -147,8 +114,8 @@ sudo codesign --force --deep --sign - /Applications/WeChat.app
 codesign -dv /Applications/WeChat.app 2>&1 | grep -E "Signature|flags"
 # 期望: flags=0x2(adhoc), Signature=adhoc
 
-# 5. 用户需在 GUI 上重新打开微信并登录
-# （或者 SSH 执行 open，但用户仍需在 GUI 上完成登录）
+# 5. 你需要在 GUI 上重新打开自己的微信并登录
+# （或者 SSH 执行 open，但仍需在 GUI 上完成登录）
 open /Applications/WeChat.app
 ```
 
@@ -172,7 +139,6 @@ open /Applications/WeChat.app
 | `task_for_pid` (ad-hoc App) | sudo | 无 |
 | `task_for_pid` (Apple 签名 App) | sudo + TCC DeveloperTool | **不可行**，必须本机 Terminal |
 | `codesign` 重签名 App | sudo + FDA | SSH 需添加 sshd + sshd-keygen-wrapper 到 FDA |
-| 修改 TCC.db | sudo + 关闭 SIP | **不推荐** |
 
 ### 完全远程操作清单（一次性 GUI 配置）
 
@@ -180,8 +146,8 @@ open /Applications/WeChat.app
 
 1. **完全磁盘访问** → 添加 `/usr/sbin/sshd` 和 `/usr/libexec/sshd-keygen-wrapper`
 2. SSH 连入 → `sudo codesign --force --deep --sign - /Applications/WeChat.app`
-3. 用户在 GUI 重开微信并登录
-4. 之后 SSH 永久可以 `sudo` 提取密钥，微信重启也不影响（除非更新覆盖签名）
+3. 在 GUI 上重开自己的微信并登录
+4. 之后 SSH 永久可以 `sudo` 获取访问凭据，微信重启也不影响（除非更新覆盖签名）
 
 ---
 
@@ -189,10 +155,6 @@ open /Applications/WeChat.app
 
 | 误区 | 真相 |
 |------|------|
-| "需要给终端完全磁盘访问才能调试" | ❌ FDA 控制文件访问，不控制进程调试 |
-| "需要给终端开发者工具权限" | ⚠️ 仅当目标 App 有 hardened runtime 时才需要 |
-| "SSH 下永远无法提取密钥" | ❌ 目标 App 是 ad-hoc 签名时，SSH sudo 可以 |
-| "macOS 版本决定了能否 SSH 调试" | ❌ 主要取决于目标 App 的签名状态 |
-| "SIP 阻止了调试微信" | ❌ SIP 只保护系统进程，微信不受 SIP 保护 |
+| "需要给终端完全磁盘访问才能访问进程" | ❌ FDA 控制文件访问，不控制进程访问 |
 | "加了 sshd 到 FDA 就行" | ❌ 还需要加 `sshd-keygen-wrapper`，且要重连 SSH |
 | "微信开着也能重签名" | ❌ 运行中的 binary/dylib 被占用，codesign 会失败 |

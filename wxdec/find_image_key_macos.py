@@ -1,8 +1,8 @@
-"""macOS WeChat 4.x 图片 AES key 派生（无需扫描进程内存）。
+"""macOS WeChat 4.x 图片 AES key 派生（无需读取进程内存）。
 
 通过 macOS 微信 4.x 在磁盘上的 kvcomm 缓存文件命名约定，派生出 V2 .dat
-图片解密所需的 (xor_key, aes_key)。解决 issue #23：macOS 用户无法用
-C 版扫描器从进程内存提取图片密钥（197K 候选全部失败）。
+图片解码所需的 (xor_key, aes_key)。解决 issue #23：macOS 用户无法用
+C 版扫描器从进程内存获取图片 key（197K 候选全部失败）。
 
 派生算法
 --------

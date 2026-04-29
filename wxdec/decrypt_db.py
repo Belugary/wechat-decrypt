@@ -1,9 +1,9 @@
 """
-WeChat 4.0 数据库解密器
+WeChat 4.0 数据库导出工具
 
-使用从进程内存提取的per-DB enc_key解密SQLCipher 4加密的数据库
+使用 per-DB enc_key 读取 SQLCipher 4 格式的数据库文件并导出为标准 SQLite
 参数: SQLCipher 4, AES-256-CBC, HMAC-SHA512, reserve=80, page_size=4096
-密钥来源: all_keys.json (由find_all_keys.py从内存提取)
+凭据来源: all_keys.json (由 find_all_keys.py 获取)
 """
 import argparse, hashlib, struct, os, sys, json, time
 import hmac as hmac_mod
@@ -195,36 +195,36 @@ def decrypt_database(db_path, out_path, enc_key):
 
 
 def main(argv=None):
-    """批量解密微信 4.x 加密数据库。
+    """批量导出微信 4.x 加密数据库到标准 SQLite 文件。
 
     退出码:
-      0 — 全部 DB 解密成功;若启用 --with-wal,所有 WAL 也合并成功
-      1 — 至少一个 DB 解密失败(或 SKIP / SQLite 校验失败)
-      2 — 所有 DB 解密成功但启用 --with-wal 时部分 WAL 合并失败
+      0 — 全部 DB 导出成功;若启用 --with-wal,所有 WAL 也合并成功
+      1 — 至少一个 DB 导出失败(或 SKIP / SQLite 校验失败)
+      2 — 所有 DB 导出成功但启用 --with-wal 时部分 WAL 合并失败
     """
     parser = argparse.ArgumentParser(
         prog="decrypt_db",
-        description="批量解密微信 4.x 加密数据库到明文目录",
+        description="批量导出微信 4.x 加密数据库到标准 SQLite 目录",
     )
     parser.add_argument(
         "--with-wal",
         action="store_true",
-        help="解密后把 WAL 合并进明文 DB(获得当天最新消息)。默认不合并以保持向后兼容。",
+        help="导出后把 WAL 合并进标准 DB(获得当天最新消息)。默认不合并以保持向后兼容。",
     )
     parser.add_argument(
         "--db-dir",
         default=None,
-        help=f"加密 DB 根目录,覆盖 config.json 的 db_dir(默认: {DB_DIR})",
+        help=f"源 DB 根目录,覆盖 config.json 的 db_dir(默认: {DB_DIR})",
     )
     parser.add_argument(
         "--keys-file",
         default=None,
-        help=f"密钥 JSON 路径,覆盖 config.json 的 keys_file(默认: {KEYS_FILE})",
+        help=f"凭据 JSON 路径,覆盖 config.json 的 keys_file(默认: {KEYS_FILE})",
     )
     parser.add_argument(
         "--out-dir",
         default=None,
-        help=f"明文输出根目录,覆盖 config.json 的 decrypted_dir(默认: {OUT_DIR})",
+        help=f"标准 SQLite 输出根目录,覆盖 config.json 的 decrypted_dir(默认: {OUT_DIR})",
     )
     args = parser.parse_args(argv)
 
@@ -234,7 +234,7 @@ def main(argv=None):
     with_wal = args.with_wal
 
     print("=" * 60)
-    print("  WeChat 4.0 数据库解密器")
+    print("  WeChat 4.0 数据库导出工具")
     print("=" * 60)
 
     if not with_wal:
@@ -250,9 +250,9 @@ def main(argv=None):
         print(f"[ERROR] DB 目录不存在或不可访问: {db_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # 加载密钥
+    # 加载凭据
     if not os.path.exists(keys_file):
-        print(f"[ERROR] 密钥文件不存在: {keys_file}")
+        print(f"[ERROR] 凭据文件不存在: {keys_file}")
         print("请先运行 find_all_keys.py")
         sys.exit(1)
 
@@ -260,7 +260,7 @@ def main(argv=None):
         keys = json.load(f)
 
     keys = strip_key_metadata(keys)
-    print(f"\n加载 {len(keys)} 个数据库密钥")
+    print(f"\n加载 {len(keys)} 条数据库访问凭据")
     print(f"输出目录: {out_dir}")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -287,14 +287,14 @@ def main(argv=None):
     for rel, path, sz in db_files:
         key_info = get_key_info(keys, rel)
         if not key_info:
-            print(f"SKIP: {rel} (无密钥)")
+            print(f"SKIP: {rel} (无凭据)")
             failed += 1
             continue
 
         enc_key = bytes.fromhex(key_info["enc_key"])
         out_path = os.path.join(out_dir, rel)
 
-        print(f"解密: {rel} ({sz/1024/1024:.1f}MB) ...", end=" ")
+        print(f"导出: {rel} ({sz/1024/1024:.1f}MB) ...", end=" ")
 
         ok = decrypt_database(path, out_path, enc_key)
         if not ok:
@@ -330,7 +330,7 @@ def main(argv=None):
                     wal_merged += 1
                 except Exception as e:
                     print(
-                        f"[WARN] {rel}: DB 解密成功,WAL 合并失败: {e}",
+                        f"[WARN] {rel}: DB 导出成功,WAL 合并失败: {e}",
                         file=sys.stderr,
                     )
                     print(
@@ -353,8 +353,8 @@ def main(argv=None):
     print(f"结果: {success} 成功, {failed} 失败, 共 {len(db_files)} 个")
     if with_wal:
         print(f"WAL: {wal_merged} 合并, {wal_failed} 失败")
-    print(f"解密数据量: {total_bytes/1024/1024/1024:.1f}GB")
-    print(f"解密文件在: {out_dir}")
+    print(f"导出数据量: {total_bytes/1024/1024/1024:.1f}GB")
+    print(f"导出文件在: {out_dir}")
 
     if failed > 0:
         sys.exit(1)

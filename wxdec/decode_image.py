@@ -1,9 +1,9 @@
 r"""
-微信图片 .dat 文件解密模块
+微信图片 .dat 文件解码模块
 
-支持两种加密格式:
-  - 旧格式: 单字节 XOR 加密，key 通过对比文件头与已知图片 magic bytes 自动检测
-  - V2 格式 (2025-08+): AES-128-ECB + XOR 混合加密，需要从微信进程内存提取 AES key
+支持两种格式:
+  - 旧格式: 单字节 XOR 编码，key 通过对比文件头与已知图片 magic bytes 自动检测
+  - V2 格式 (2025-08+): AES-128-ECB + XOR 混合编码，需要 V2 AES key
 
 V2 文件结构:
   [6B signature: 07 08 V2 08 07] [4B aes_size LE] [4B xor_size LE] [1B padding]
@@ -13,7 +13,7 @@ V2 文件结构:
   D:\xwechat_files\<wxid>\msg\attach\<md5(username)>\<YYYY-MM>\Img\<file_md5>[_t|_h].dat
 
 映射链:
-  message_*.db (local_id) → message_resource.db (packed_info 含 MD5) → .dat 文件 → 解密
+  message_*.db (local_id) → message_resource.db (packed_info 含 MD5) → .dat 文件 → 解码
 """
 
 import os

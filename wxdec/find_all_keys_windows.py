@@ -1,5 +1,5 @@
 """
-从微信进程内存中提取所有数据库的缓存raw key
+从微信进程获取所有数据库的访问凭据 (cached raw key)
 
 WCDB为每个DB缓存: x'<64hex_enc_key><32hex_salt>'
 salt嵌在hex字符串中，可以直接匹配DB文件的salt
@@ -82,7 +82,7 @@ def main():
     out_file = _cfg["keys_file"]
 
     print("=" * 60)
-    print("  提取所有微信数据库密钥")
+    print("  获取所有微信数据库访问凭据")
     print("=" * 60)
 
     # 1. 收集所有DB文件及其salt
@@ -136,7 +136,7 @@ def main():
             kernel32.CloseHandle(h)
 
         if not remaining_salts:
-            print(f"\n[+] 所有密钥已找到，跳过剩余进程")
+            print(f"\n[+] 所有访问凭据已获取，跳过剩余进程")
             break
 
     elapsed = time.time() - t0
