@@ -1,6 +1,6 @@
-# WeChat 4.x Database Decryptor
+# wx-data-toolkit
 
-微信 4.0 (Windows / macOS / Linux) 本地数据库解密工具。从运行中的微信进程内存提取加密密钥，解密 SQLCipher 4 数据库 + `.dat` 图片，并提供实时消息监听。
+WeChat 4.0 本地数据 toolkit (Windows / macOS / Linux)。面向**数字取证、数据迁移、个人备份、LLM 分析**等场景，仅用于访问用户自己机器上的本地数据。能力覆盖：从运行中的微信进程内存提取加密密钥、解密 SQLCipher 4 数据库与 `.dat` 图片、解密朋友圈 ISAAC-64 媒体流、提供实时消息流与 MCP 集成。
 
 ## 本 fork 相对原项目的增强
 
@@ -40,7 +40,7 @@ sudo ./bin/find_all_keys_macos
 
 **实时消息流**：`python main.py` → http://localhost:5678（SSE，~100ms 延迟，图片内联预览）。HTTP API: `/api/history`、`/api/tags`、`/stream`。
 
-**Claude MCP 集成**：`claude mcp add wechat -- python /path/to/wechat-decrypt/wxdec/mcp_server.py`。可用工具：`get_recent_sessions` / `get_chat_history` / `search_messages` / `get_contacts` / `get_contact_tags` / `get_tag_members` / `get_new_messages`。
+**Claude MCP 集成**：`claude mcp add wechat -- python /path/to/wx-data-toolkit/wxdec/mcp_server.py`。可用工具：`get_recent_sessions` / `get_chat_history` / `search_messages` / `get_contacts` / `get_contact_tags` / `get_tag_members` / `get_new_messages`。
 
 **[使用案例（截图）→](docs/usage.md)**
 
