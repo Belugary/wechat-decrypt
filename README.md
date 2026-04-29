@@ -101,14 +101,14 @@ macOS：
 - **页面**：4096 bytes, reserve = 80（IV 16 + HMAC 64）
 - 每个数据库有独立的 salt 和 enc_key
 
-WCDB（微信的 SQLCipher 封装）会在进程内存中缓存派生后的 raw key，格式为 `x'<64hex_enc_key><32hex_salt>'`。三个平台均通过扫描进程内存匹配此模式，再通过 HMAC 校验 page 1 确认密钥正确性。
+WCDB（微信的 SQLCipher 封装）会在进程内存中缓存派生后的 raw key，格式为 `x'<64hex_enc_key><32hex_salt>'`。三个平台均通过扫描进程内存匹配此模式，再通过 HMAC 校验 page 1 确认 raw key 正确性。
 
 ### WAL 处理
 
 微信使用 SQLite WAL 模式，WAL 文件**预分配固定大小**（4MB）。检测变化时：
 - 不能用文件大小（永远不变）
 - 使用 mtime 检测写入
-- 解密 WAL frame 时需校验 salt 值，跳过旧周期遗留的 frame
+- 读取 WAL frame 时需校验 salt 值，跳过旧周期遗留的 frame
 
 ### 图片 .dat 存储格式
 
@@ -120,7 +120,7 @@ WCDB（微信的 SQLCipher 封装）会在进程内存中缓存派生后的 raw 
 
 V2 文件结构：`[6B signature] [4B aes_size LE] [4B xor_size LE] [1B padding]` + `[AES-ECB encrypted] [raw unencrypted] [XOR encrypted]`。
 
-**macOS 派生算法**：扫描 `~/Library/Containers/com.tencent.xinWeChat/.../app_data/net/kvcomm/key_*.statistic` 文件名提取派生码 `code`，配合 `db_dir` 路径里的 wxid，按 `aes_key = MD5(str(code) + cleaned_wxid)[:16]` / `xor_key = code & 0xFF` 推算密钥，并用一张 V2 `_t.dat` 缩略图做 AES 模板验证。算法发现归功于 [@hicccc77](https://github.com/hicccc77) 在 [issue #23 评论](https://github.com/ylytdeng/wechat-decrypt/issues/23)，参考实现见其 [WeFlow](https://github.com/hicccc77/WeFlow/blob/dev/electron/services/keyServiceMac.ts)（CC BY-NC-SA 4.0）；本仓库的 `find_image_key_macos.py` 是基于该算法的独立 Python clean-room 实现。
+**macOS 派生算法**：扫描 `~/Library/Containers/com.tencent.xinWeChat/.../app_data/net/kvcomm/key_*.statistic` 文件名提取派生码 `code`，配合 `db_dir` 路径里的 wxid，按 `aes_key = MD5(str(code) + cleaned_wxid)[:16]` / `xor_key = code & 0xFF` 推算 key，并用一张 V2 `_t.dat` 缩略图做 AES 模板验证。算法发现归功于 [@hicccc77](https://github.com/hicccc77) 在 [issue #23 评论](https://github.com/ylytdeng/wechat-decrypt/issues/23)，参考实现见其 [WeFlow](https://github.com/hicccc77/WeFlow/blob/dev/electron/services/keyServiceMac.ts)（CC BY-NC-SA 4.0）；本仓库的 `find_image_key_macos.py` 是基于该算法的独立 Python clean-room 实现。
 
 ### 数据库结构
 
@@ -159,7 +159,7 @@ V2 文件结构：`[6B signature] [4B aes_size LE] [4B xor_size LE] [1B padding]
 
 ## 致谢
 
-- [ylytdeng/wechat-decrypt](https://github.com/ylytdeng/wechat-decrypt) — 本仓库 fork 的上游，提供 SQLCipher 解密、密钥提取等核心能力
+- [ylytdeng/wechat-decrypt](https://github.com/ylytdeng/wechat-decrypt) — 本仓库 fork 的上游，提供 SQLCipher 4 数据库读取、访问凭据获取等核心能力
 - [LifeArchiveProject/WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis) — 朋友圈 XML 解析与时间线结构的参考实现
 - [nobiyou/wx_channel](https://github.com/nobiyou/wx_channel) (MIT) — `pkg/util/isaac64.go` 提供了 WeFlow `WxIsaac64` 的 Go clean-room 实现，本仓库 [wxdec/sns_isaac.py](wxdec/sns_isaac.py) 据此移植到 Python（关键差异：PHI 常数尾字节是 `0x13` 而非标准 ISAAC-64 的 `0x15`）
-- [hicccc77/WeFlow](https://github.com/hicccc77/WeFlow) — 朋友圈媒体 ISAAC-64 keystream 与 macOS 图片密钥派生算法的权威参考
+- [hicccc77/WeFlow](https://github.com/hicccc77/WeFlow) — 朋友圈媒体 ISAAC-64 keystream 与 macOS 图片 key 派生算法的权威参考
