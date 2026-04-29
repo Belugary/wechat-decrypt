@@ -40,7 +40,7 @@ sudo ./bin/find_all_keys_macos
 
 **Claude MCP 集成** — `claude mcp add wechat -- python /path/to/wx-data-toolkit/wxdec/mcp_server.py`。可用工具：`get_recent_sessions` / `get_chat_history` / `search_messages` / `get_contacts` / `get_contact_tags` / `get_tag_members` / `get_new_messages`。
 
-**[使用案例（截图）→](docs/usage.md)**
+**[使用案例 →](docs/usage.md)**
 
 <details>
 <summary><b>详细配置 / 平台前置 / config.json 模板</b></summary>
