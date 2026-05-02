@@ -17,9 +17,15 @@ schtasks)触发, 串联本项目的三件套:
 systemd 的 journal / schtasks 的 .bat 重定向)负责落到具体日志文件。
 
 设计原则:
-  - 步骤 1 / 2 任一失败 → 整体 fail (DB / 标准格式图是后续步骤的输入)
-  - 步骤 3 失败 → log warn 但 rc 0 (朋友圈是 best-effort, 单天 CDN 抽风
-    不应阻塞下次跑)
+  - 三步独立, 任一步失败不阻塞其余步骤 — 它们的输入彼此解耦:
+      * step 1 读微信进程内存 (需 WeChat 在跑) → 写 decrypted/
+      * step 2 读 msg/attach/*.dat (微信自己落盘) + config.json image_aes_key
+        → 写 decoded_image_dir/   不依赖 step 1 当日是否成功
+      * step 3 读已存在的 decrypted/sns/sns.db (可以是上次跑的旧版) + CDN
+        → 写 sns 媒体目录   不依赖 step 1 当日是否成功
+  - 任一步失败 → 整体 rc=1 (调度器能感知), 但失败步骤不阻塞后续步骤运行
+  - 历史版本曾让 step 1 失败直接 abort, 导致微信偶尔没开的那一天连图片备份
+    一并停摆 — 这是错误的依赖假设, 已修正
 """
 import datetime
 import functools
@@ -86,21 +92,29 @@ def main():
     _log(f"project root: {root}")
     _log(f"python:       {py}")
 
-    # 1. DB decrypt — picks up today's WAL increments.
+    failures = []
+
+    # 1. DB decrypt — picks up today's WAL increments. Needs WeChat process
+    # running (key dump from process memory). If WeChat is not running, this
+    # step fails but downstream steps continue using the previous run's exports.
     proc = _run_step("decrypt --with-wal", [py, "main.py", "decrypt", "--with-wal"], cwd=root)
     if proc is None or proc.returncode != 0:
-        _log("step 1 (decrypt) failed; aborting")
-        return 1
+        _log("step 1 (decrypt) failed — continuing with previous run's exports")
+        failures.append("decrypt")
 
     # 2. .dat image decryption (mirrors attach tree to plain image tree).
+    # Independent of step 1: reads msg/attach/*.dat (written by WeChat itself)
+    # and uses image_aes_key from config.json (static, no process dump needed).
     proc = _run_step("decode-images", [py, "main.py", "decode-images"], cwd=root)
     if proc is None or proc.returncode != 0:
-        _log("step 2 (decode-images) failed; aborting")
-        return 1
+        _log("step 2 (decode-images) failed")
+        failures.append("decode-images")
 
     # 3. SNS media — only the recent 7-day window. CDN URLs typically expire
     # in ~5 days; 2 days of buffer absorbs sleep cycles / network blips.
-    # Best-effort: a single bad day shouldn't fail the whole job.
+    # Reads existing decrypted/sns/sns.db (may be stale if step 1 failed today,
+    # which only means the latest day of posts is missing — still worth running
+    # for the prior 6 days of CDN catch-up).
     today = datetime.date.today()
     start = today - datetime.timedelta(days=7)
     end = today + datetime.timedelta(days=1)
@@ -114,8 +128,12 @@ def main():
         cwd=root,
     )
     if proc is None or proc.returncode != 0:
-        _log("step 3 (decrypt_sns) failed — non-fatal, DB/.dat already done")
+        _log("step 3 (decrypt_sns) failed")
+        failures.append("decrypt_sns")
 
+    if failures:
+        _log(f"daily-sync completed with failures: {failures}")
+        return 1
     _log("daily-sync completed OK")
     return 0
 
